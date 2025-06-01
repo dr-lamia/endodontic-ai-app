@@ -111,7 +111,7 @@ if st.sidebar.button("Predict Diagnosis"):
 
 # --- 3. Vision-Language Model UI and Upload Area ---
 st.markdown("---")
-st.header("📷 X-ray Analysis with AI Vision-Language Models")
+st.header(" 💬Ask AI Dental Assistant")
 
 # Model selection UI skipped for brevity here, keep as before.
 
