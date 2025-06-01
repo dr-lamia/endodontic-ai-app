@@ -14,7 +14,7 @@ import openai
 # ✅ Must be first Streamlit command
 st.set_page_config(page_title="Endodontic Multimodal AI Assistant", layout="wide")
 
-# --- API Keys ---
+# --- API Keys (set in Streamlit Cloud secrets) ---
 HF_TOKEN = st.secrets.get("HF_TOKEN")
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY")
 openai.api_key = OPENAI_API_KEY
@@ -109,7 +109,13 @@ if st.sidebar.button("Predict Diagnosis"):
 
     st.session_state["diagnosis"] = diagnosis
 
-# --- 3. Chat Interface with OpenAI ---
+# --- 3. Vision-Language Model UI and Upload Area ---
+st.markdown("---")
+st.header("📷 X-ray Analysis with AI Vision-Language Models")
+
+# Model selection UI skipped for brevity here, keep as before.
+
+# --- 4. Chat with Assistant using OpenAI ---
 st.markdown("---")
 st.header("💬 Chat with AI Assistant")
 
@@ -120,25 +126,28 @@ user_input = st.text_input("Ask a question about the diagnosis or treatment:")
 if user_input:
     diagnosis = st.session_state.get("diagnosis", "a dental condition")
 
-    response = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "You are a helpful dental AI assistant."},
-            {"role": "user", "content": f"Diagnosis: {diagnosis}. Question: {user_input}"}
-        ]
-    )
-    answer = response.choices[0].message.content
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": f"You are a dental assistant helping interpret {diagnosis}"},
+                {"role": "user", "content": user_input},
+            ]
+        )
+        answer = response.choices[0].message.content
+    except Exception as e:
+        answer = "❌ GPT-4 API failed: " + str(e)
 
     st.session_state.chat_history.append(("You", user_input))
     st.session_state.chat_history.append(("AI", answer))
 
-# Display chat history
 for sender, message in st.session_state.chat_history[-6:]:
     if sender == "You":
         st.markdown(f"**🧑 You:** {message}")
     else:
         st.markdown(f"**🤖 AI:** {message}")
 
+# Export features
 if st.button("📝 Export Chat as .txt"):
     chat_lines = [f"{sender}: {message}" for sender, message in st.session_state.chat_history]
     chat_text = "\n".join(chat_lines)
