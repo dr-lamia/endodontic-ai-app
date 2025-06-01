@@ -95,13 +95,16 @@ def query_medgemma_api(image_bytes):
     headers = {"Authorization": f"Bearer {st.secrets['HF_TOKEN']}"}
     API_URL = "https://api-inference.huggingface.co/models/google/medgemma-2b"
     response = requests.post(API_URL, headers=headers, files={"inputs": image_bytes})
-    return response.json()
+    try:
+        return response.json()
+    except requests.exceptions.JSONDecodeError:
+        return {"error": "Unable to decode response. The model might still be loading or token is invalid."}
 
 if xray_file is not None:
     st.image(xray_file, caption="Uploaded X-ray", use_column_width=True)
     response = query_medgemma_api(xray_file.read())
-    st.success("**MedGemma AI Interpretation:**")
-    if isinstance(response, dict):
-        st.json(response)
+    if "error" in response:
+        st.error(f"MedGemma API Error: {response['error']}")
     else:
-        st.write(response)
+        st.success("**MedGemma AI Interpretation:**")
+        st.json(response)
