@@ -78,7 +78,7 @@ rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
 rf_model.fit(df_data[selected_features], df_data["Diagnosis"])
 
 # --- 2. UI: Symptom Input & Diagnosis Prediction ---
-st.title("🦷 Endodontic AI Assistant with Free VLM")
+st.title("🦷 Endodontic AI Assistant")
 
 st.sidebar.header("Patient Signs & Symptoms")
 
