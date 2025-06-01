@@ -9,14 +9,15 @@ from imblearn.over_sampling import SMOTE
 import io
 import os
 import datetime
+import openai
 
 # ✅ Must be first Streamlit command
 st.set_page_config(page_title="Endodontic Multimodal AI Assistant", layout="wide")
 
-# --- API Keys (set in Streamlit Cloud secrets) ---
+# --- API Keys ---
 HF_TOKEN = st.secrets.get("HF_TOKEN")
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY")
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY")
+openai.api_key = OPENAI_API_KEY
 
 # --- 1. Generate + Train Model on Synthetic Dataset ---
 @st.cache_data
@@ -79,6 +80,7 @@ rf_model.fit(df_data[selected_features], df_data["Diagnosis"])
 
 # --- 2. App Interface ---
 st.title("🦷 AI Dental Diagnosis Assistant")
+
 st.sidebar.header("Patient Signs & Symptoms")
 manual_feats = ["Radiolucency on X-ray"]
 all_feats = sorted(set(selected_features + manual_feats))
@@ -104,73 +106,49 @@ if st.sidebar.button("Predict Diagnosis"):
     }).sort_values(by="Importance", ascending=False).reset_index(drop=True)
     st.markdown("### 🔍 Feature Importance (Diagnosis Model)")
     st.dataframe(feat_imp_df, use_container_width=True)
+
     st.session_state["diagnosis"] = diagnosis
 
-# --- 3. Vision-Language X-ray Analysis ---
-st.markdown("---")
-st.header("📷 X-ray Analysis with AI Vision-Language Models")
-model_choice = st.selectbox("Choose Vision-Language Model:", [
-    "BLIP", "ViT-GPT2", "OpenAI GPT-4 Vision", "Gemini Vision"
-])
-
-uploaded_file = st.file_uploader("Upload dental X-ray (JPG/PNG)", type=["jpg", "jpeg", "png"])
-if uploaded_file:
-    image = Image.open(uploaded_file).convert("RGB")
-    processed = ImageOps.exif_transpose(image).resize((512, 512))
-    st.image(processed, caption="Processed X-ray", use_column_width=True)
-    image_bytes = io.BytesIO()
-    processed.save(image_bytes, format="PNG")
-    image_bytes = image_bytes.getvalue()
-
-    if model_choice in ["BLIP", "ViT-GPT2"]:
-        hf_model = {
-            "BLIP": "Salesforce/blip-image-captioning-base",
-            "ViT-GPT2": "nlpconnect/vit-gpt2-image-captioning"
-        }[model_choice]
-        response = requests.post(
-            f"https://api-inference.huggingface.co/models/{hf_model}",
-            headers={"Authorization": f"Bearer {HF_TOKEN}"},
-            files={"inputs": image_bytes}
-        )
-        if response.ok:
-            caption = response.json()[0].get("generated_text", "No caption.")
-            st.success("🧠 Model Caption: " + caption)
-            if "diagnosis" in st.session_state:
-                st.markdown(f"**🔁 Correlation:** The caption above may indicate _{st.session_state['diagnosis']}_ if consistent with clinical symptoms.")
-        else:
-            st.error("❌ Failed to analyze image.")
-    elif model_choice == "OpenAI GPT-4 Vision":
-        st.warning("🔐 GPT-4 Vision integration requires OpenAI API access.")
-    elif model_choice == "Gemini Vision":
-        st.warning("🔐 Gemini Vision support is coming soon.")
-
-# --- 4. Chat Assistant ---
+# --- 3. Chat Interface with OpenAI ---
 st.markdown("---")
 st.header("💬 Chat with AI Assistant")
+
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
 user_input = st.text_input("Ask a question about the diagnosis or treatment:")
 if user_input:
     diagnosis = st.session_state.get("diagnosis", "a dental condition")
-    answer = f"As an AI assistant, I suggest consulting a dentist for detailed management of {diagnosis}. You asked: '{user_input}'"
+
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You are a helpful dental AI assistant."},
+            {"role": "user", "content": f"Diagnosis: {diagnosis}. Question: {user_input}"}
+        ]
+    )
+    answer = response.choices[0].message.content
+
     st.session_state.chat_history.append(("You", user_input))
     st.session_state.chat_history.append(("AI", answer))
 
+# Display chat history
 for sender, message in st.session_state.chat_history[-6:]:
-    st.markdown(f"**{'🧑 You' if sender == 'You' else '🤖 AI'}:** {message}")
+    if sender == "You":
+        st.markdown(f"**🧑 You:** {message}")
+    else:
+        st.markdown(f"**🤖 AI:** {message}")
 
-# Save chat to .txt
 if st.button("📝 Export Chat as .txt"):
     chat_lines = [f"{sender}: {message}" for sender, message in st.session_state.chat_history]
     chat_text = "\n".join(chat_lines)
     st.download_button("📥 Download Chat Log", chat_text, file_name="chat_history.txt")
 
-# Save full patient case
 if st.button("📁 Save Full Patient Case"):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
     diagnosis = st.session_state.get("diagnosis", "unknown")
     symptoms = [feat for feat, val in st.session_state.items() if feat in selected_features and val]
     chat_lines = [f"{sender}: {message}" for sender, message in st.session_state.chat_history]
+
     case_text = f"Patient Case - {timestamp}\nDiagnosis: {diagnosis}\nSymptoms: {', '.join(symptoms)}\n\nChat:\n" + "\n".join(chat_lines)
     st.download_button("📥 Download Full Case Log", case_text, file_name=f"patient_case_{timestamp}.txt")
