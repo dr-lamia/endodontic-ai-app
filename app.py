@@ -1,10 +1,4 @@
 import streamlit as st
-
-# ✅ Must be first Streamlit command
-st.set_page_config(page_title="Endodontic Multimodal AI Assistant", layout="wide")
-
-
-import streamlit as st
 import pandas as pd
 import random
 import requests
@@ -14,9 +8,15 @@ from sklearn.feature_selection import SelectFromModel
 from imblearn.over_sampling import SMOTE
 import io
 import os
+import datetime
+
+# ✅ Must be first Streamlit command
+st.set_page_config(page_title="Endodontic Multimodal AI Assistant", layout="wide")
 
 # --- API Keys (set in Streamlit Cloud secrets) ---
 HF_TOKEN = st.secrets.get("HF_TOKEN")
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY")
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY")
 
 # --- 1. Generate + Train Model on Synthetic Dataset ---
 @st.cache_data
@@ -78,9 +78,7 @@ rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
 rf_model.fit(df_data[selected_features], df_data["Diagnosis"])
 
 # --- 2. App Interface ---
-st.set_page_config(page_title="Endodontic Multimodal AI Assistant", layout="wide")
 st.title("🦷 AI Dental Diagnosis Assistant")
-
 st.sidebar.header("Patient Signs & Symptoms")
 manual_feats = ["Radiolucency on X-ray"]
 all_feats = sorted(set(selected_features + manual_feats))
@@ -106,15 +104,13 @@ if st.sidebar.button("Predict Diagnosis"):
     }).sort_values(by="Importance", ascending=False).reset_index(drop=True)
     st.markdown("### 🔍 Feature Importance (Diagnosis Model)")
     st.dataframe(feat_imp_df, use_container_width=True)
-
     st.session_state["diagnosis"] = diagnosis
 
 # --- 3. Vision-Language X-ray Analysis ---
 st.markdown("---")
 st.header("📷 X-ray Analysis with AI Vision-Language Models")
-
 model_choice = st.selectbox("Choose Vision-Language Model:", [
-    "BLIP", "ViT-GPT2", "BioViL-T", "ClinicalCamel", "OpenAI GPT-4 Vision", "Gemini Vision"
+    "BLIP", "ViT-GPT2", "OpenAI GPT-4 Vision", "Gemini Vision"
 ])
 
 uploaded_file = st.file_uploader("Upload dental X-ray (JPG/PNG)", type=["jpg", "jpeg", "png"])
@@ -143,70 +139,26 @@ if uploaded_file:
                 st.markdown(f"**🔁 Correlation:** The caption above may indicate _{st.session_state['diagnosis']}_ if consistent with clinical symptoms.")
         else:
             st.error("❌ Failed to analyze image.")
-
-    elif model_choice == "BioViL-T":
-        st.info("BioViL-T returns visual embeddings for downstream diagnosis tasks.")
-
-    elif model_choice == "ClinicalCamel":
-        if "diagnosis" in st.session_state:
-            st.info("📋 ClinicalCamel can cross-check diagnosis from symptoms.")
-        else:
-            st.warning("Run symptom-based diagnosis first.")
-
     elif model_choice == "OpenAI GPT-4 Vision":
-        st.warning("Requires OpenAI API key & integration (not public).")
-
+        st.warning("🔐 GPT-4 Vision integration requires OpenAI API access.")
     elif model_choice == "Gemini Vision":
-        st.warning("Requires Gemini API key (coming soon).")
+        st.warning("🔐 Gemini Vision support is coming soon.")
 
-
-# --- 4. Chat with Assistant (Simple Memory) ---
+# --- 4. Chat Assistant ---
 st.markdown("---")
 st.header("💬 Chat with AI Assistant")
-
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
-user_input = st.text_input("Ask a question about the diagnosis or treatment:")
-if user_input:
-    # Very simple echo logic (can be replaced with GPT API)
-    diagnosis = st.session_state.get("diagnosis", "a dental condition")
-    answer = f"As an AI assistant, I suggest consulting a dentist for detailed management of {diagnosis}. Your question was: '{user_input}'"
-    st.session_state.chat_history.append(("You", user_input))
-    st.session_state.chat_history.append(("AI", answer))
-
-for sender, message in st.session_state.chat_history[-6:]:  # Show last 3 exchanges
-    if sender == "You":
-        st.markdown(f"**🧑 You:** {message}")
-    else:
-        st.markdown(f"**🤖 AI:** {message}")
-
-
-# --- 4. Chat with AI Assistant (Advanced with Save/Export) ---
-import datetime
-
-st.markdown("---")
-st.header("💬 Chat with AI Assistant")
-
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
 user_input = st.text_input("Ask a question about the diagnosis or treatment:")
 if user_input:
     diagnosis = st.session_state.get("diagnosis", "a dental condition")
-
-    # Placeholder AI logic (for GPT API, use OpenAI here)
     answer = f"As an AI assistant, I suggest consulting a dentist for detailed management of {diagnosis}. You asked: '{user_input}'"
-
     st.session_state.chat_history.append(("You", user_input))
     st.session_state.chat_history.append(("AI", answer))
 
-# Display chat history
 for sender, message in st.session_state.chat_history[-6:]:
-    if sender == "You":
-        st.markdown(f"**🧑 You:** {message}")
-    else:
-        st.markdown(f"**🤖 AI:** {message}")
+    st.markdown(f"**{'🧑 You' if sender == 'You' else '🤖 AI'}:** {message}")
 
 # Save chat to .txt
 if st.button("📝 Export Chat as .txt"):
@@ -214,12 +166,11 @@ if st.button("📝 Export Chat as .txt"):
     chat_text = "\n".join(chat_lines)
     st.download_button("📥 Download Chat Log", chat_text, file_name="chat_history.txt")
 
-# Save full case
+# Save full patient case
 if st.button("📁 Save Full Patient Case"):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
     diagnosis = st.session_state.get("diagnosis", "unknown")
     symptoms = [feat for feat, val in st.session_state.items() if feat in selected_features and val]
     chat_lines = [f"{sender}: {message}" for sender, message in st.session_state.chat_history]
-
     case_text = f"Patient Case - {timestamp}\nDiagnosis: {diagnosis}\nSymptoms: {', '.join(symptoms)}\n\nChat:\n" + "\n".join(chat_lines)
     st.download_button("📥 Download Full Case Log", case_text, file_name=f"patient_case_{timestamp}.txt")
