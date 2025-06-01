@@ -1,12 +1,11 @@
-
 import streamlit as st
 import pandas as pd
+import random
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectFromModel
 from imblearn.over_sampling import SMOTE
-import torch
 from PIL import Image
-import random
+import requests
 
 @st.cache_data
 def generate_and_process_dataset():
@@ -46,10 +45,8 @@ def generate_and_process_dataset():
     df = pd.DataFrame(data)
     X = df.drop(columns=["Diagnosis"])
     y = df["Diagnosis"]
-
     smote = SMOTE(random_state=42)
     X_resampled, y_resampled = smote.fit_resample(X, y)
-
     model_fs = RandomForestClassifier(n_estimators=100, random_state=42)
     model_fs.fit(X_resampled, y_resampled)
     selector = SelectFromModel(model_fs, threshold="median", prefit=True)
@@ -57,10 +54,7 @@ def generate_and_process_dataset():
     selected_features = list(X.columns[selector.get_support()])
     df_final = pd.DataFrame(X_selected, columns=selected_features)
     df_final["Diagnosis"] = y_resampled
-
     return df_final, selected_features
-
-@st.cache_resource
 
 df_data, selected_features = generate_and_process_dataset()
 model = RandomForestClassifier(n_estimators=100, random_state=42)
@@ -78,7 +72,6 @@ if st.sidebar.button("Predict Diagnosis"):
     input_df = pd.DataFrame([inputs])
     diagnosis = model.predict(input_df)[0]
     st.success(f"**Predicted Diagnosis:** {diagnosis}")
-
     treatment_paths = {
         "Hyperemia": "Monitor and remove irritants. Use desensitizing agents. Follow-up recommended.",
         "Acute Pulpitis": "Perform emergency pulpotomy or pulpectomy. Prescribe analgesics. Plan for root canal therapy.",
@@ -99,11 +92,11 @@ st.subheader("📷 Optional: Upload Dental X-ray for MedGemma AI Analysis")
 xray_file = st.file_uploader("Upload a dental X-ray image (JPG or PNG)", type=["jpg", "jpeg", "png"])
 
 def query_medgemma_api(image_bytes):
-    import requests
     headers = {"Authorization": f"Bearer {st.secrets['HF_TOKEN']}"}
     API_URL = "https://api-inference.huggingface.co/models/google/medgemma-2b"
     response = requests.post(API_URL, headers=headers, files={"inputs": image_bytes})
     return response.json()
+
 if xray_file is not None:
     st.image(xray_file, caption="Uploaded X-ray", use_column_width=True)
     response = query_medgemma_api(xray_file.read())
