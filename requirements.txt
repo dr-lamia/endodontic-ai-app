@@ -1,0 +1,9 @@
+streamlit
+scikit-learn
+pandas
+openpyxl
+imbalanced-learn
+transformers
+torch
+pillow
+requests
