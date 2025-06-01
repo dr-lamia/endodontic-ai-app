@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import random
@@ -107,8 +106,19 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", st.secrets.get("GOOGLE_API_KEY", ""
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
 
+
+    st.subheader("🧠 AI X-ray Interpretation:")
+    output = analyze_xray(xray_file)
+    st.success(output) if "failed" not in output.lower() else st.error(output)
+
+    if "Diagnosis" in locals():
+        if diagnosis.lower() in output.lower():
+            st.success(f"✅ The AI output supports the diagnosis of **{diagnosis}**")
+        else:
+            st.warning(f"⚠️ The X-ray does **not clearly support** the diagnosis of **{diagnosis}**.")
+
 st.subheader("📷 Optional: Upload Dental X-ray for AI Interpretation")
-vision_model = st.selectbox("Choose Vision-Language Model", ["Gemini Vision", "OpenAI GPT-4 Vision", "MedGemma", "BLIP (captioning)", "ViT-GPT2 (captioning)"])
+vision_model = st.selectbox("Choose Free Vision Model", ["MedGemma", "BLIP (captioning)"])
 xray_file = st.file_uploader("Upload Dental X-ray image (JPG or PNG)", type=["jpg", "jpeg", "png"])
 
 def query_huggingface_model(image_bytes, model_id, retries=2):
@@ -118,44 +128,35 @@ def query_huggingface_model(image_bytes, model_id, retries=2):
         try:
             response = requests.post(url, headers=headers, files={"inputs": image_bytes})
             if response.ok:
-                return response.json()
+                result = response.json()
+                if isinstance(result, list) and "generated_text" in result[0]:
+                    return result[0]["generated_text"]
+                else:
+                    continue
         except Exception:
             continue
-    return {"error": f"{model_id} failed after {retries} attempts."}
+    return f"{model_id} failed or returned invalid response."
 
-def analyze_xray(image):
-    caption = ""
-    img = Image.open(image).convert("RGB")
+def analyze_free_vlm(xray_file, model):
+    img = Image.open(xray_file).convert("RGB")
     st.image(img, caption="Uploaded X-ray", use_column_width=True)
-
-    try:
-        if vision_model == "Gemini Vision" and GOOGLE_API_KEY:
-            model = genai.GenerativeModel("gemini-pro-vision")
-            resp = model.generate_content([img, "Describe this dental X-ray"])
-            caption = resp.text
-        elif vision_model == "OpenAI GPT-4 Vision":
-            caption = "GPT-4 Vision not implemented in this offline version."
-        elif vision_model == "MedGemma":
-            result = query_huggingface_model(image.read(), "google/medgemma-2b")
-            caption = result[0].get("generated_text", result.get("error", "MedGemma failed."))
-        elif vision_model == "BLIP (captioning)":
-            result = query_huggingface_model(image.read(), "Salesforce/blip-image-captioning-base")
-            caption = result[0].get("generated_text", result.get("error", "BLIP failed."))
-        elif vision_model == "ViT-GPT2 (captioning)":
-            result = query_huggingface_model(image.read(), "nlpconnect/vit-gpt2-image-captioning")
-            caption = result[0].get("generated_text", result.get("error", "ViT-GPT2 failed."))
-    except Exception as e:
-        caption = f"Exception: {str(e)}"
-
-    return caption
+    output = ""
+    if model == "MedGemma":
+        output = query_huggingface_model(xray_file.read(), "google/medgemma-2b")
+    elif model == "BLIP (captioning)":
+        output = query_huggingface_model(xray_file.read(), "Salesforce/blip-image-captioning-base")
+    return output
 
 if xray_file and st.button("Analyze X-ray"):
-    st.subheader("🧠 AI X-ray Interpretation:")
-    output = analyze_xray(xray_file)
-    st.success(output) if "failed" not in output.lower() else st.error(output)
+    output = analyze_free_vlm(xray_file, vision_model)
+    output_str = str(output)
+    if "failed" not in output_str.lower():
+        st.success(output_str)
+    else:
+        st.error(output_str)
 
-    if "Diagnosis" in locals():
-        if diagnosis.lower() in output.lower():
+    if "diagnosis" in locals():
+        if diagnosis.lower() in output_str.lower():
             st.success(f"✅ The AI output supports the diagnosis of **{diagnosis}**")
         else:
             st.warning(f"⚠️ The X-ray does **not clearly support** the diagnosis of **{diagnosis}**.")
