@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import random
@@ -16,10 +17,10 @@ GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY")
 openai.api_key = OPENAI_API_KEY
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# --- Diagnosis Data Preparation ---
+# --- Dataset Prep ---
 @st.cache_data
 def generate_and_process_dataset():
-    signs_symptoms = {
+    symptoms = {
         "Spontaneous Pain": [0, 1],
         "Pain on Biting": [0, 1],
         "Sensitivity to Cold": [0, 1],
@@ -39,12 +40,12 @@ def generate_and_process_dataset():
     conditions = ["Hyperemia", "Acute Pulpitis", "Chronic Pulpitis", "Periapical Abscess"]
     data = []
     for _ in range(500):
-        patient = {symptom: random.choice(values) for symptom, values in signs_symptoms.items()}
+        patient = {symptom: random.choice(vals) for symptom, vals in symptoms.items()}
         if patient["Sensitivity to Cold"] and not patient["Lingering Pain"]:
             condition = "Hyperemia"
         elif patient["Lingering Pain"] and patient["Pain on Biting"]:
             condition = "Acute Pulpitis"
-        elif patient["Lingering Pain"] and not patient["Pain on Biting"]:
+        elif patient["Lingering Pain"]:
             condition = "Chronic Pulpitis"
         elif patient["Swelling"] or patient["Sinus Tract"] or patient["Radiolucency on X-ray"]:
             condition = "Periapical Abscess"
@@ -56,118 +57,130 @@ def generate_and_process_dataset():
     X = df.drop(columns=["Diagnosis"])
     y = df["Diagnosis"]
     smote = SMOTE(random_state=42)
-    X_resampled, y_resampled = smote.fit_resample(X, y)
-    model_fs = RandomForestClassifier(n_estimators=100, random_state=42)
-    model_fs.fit(X_resampled, y_resampled)
-    selector = SelectFromModel(model_fs, threshold="median", prefit=True)
-    X_selected = selector.transform(X_resampled)
-    selected_features = list(X.columns[selector.get_support()])
-    df_final = pd.DataFrame(X_selected, columns=selected_features)
-    df_final["Diagnosis"] = y_resampled
-    return df_final, selected_features
+    X_res, y_res = smote.fit_resample(X, y)
+    fs_model = RandomForestClassifier(random_state=42)
+    fs_model.fit(X_res, y_res)
+    selector = SelectFromModel(fs_model, threshold="median", prefit=True)
+    X_sel = selector.transform(X_res)
+    sel_features = list(X.columns[selector.get_support()])
+    df_final = pd.DataFrame(X_sel, columns=sel_features)
+    df_final["Diagnosis"] = y_res
+    return df_final, sel_features
 
 df_data, selected_features = generate_and_process_dataset()
-model = RandomForestClassifier(n_estimators=100, random_state=42)
+model = RandomForestClassifier()
 model.fit(df_data[selected_features], df_data["Diagnosis"])
 
-# --- UI Section ---
-st.title("🦷 Endodontic AI Assistant with Multimodal X-ray Analysis")
-
-st.header("🧾 Diagnosis & Treatment Recommendation")
+# --- UI ---
+st.title("🦷 Endodontic AI App with Multimodal VLM Analysis")
 
 inputs = {}
 st.sidebar.header("Patient Signs & Symptoms")
 manual_features = ["Radiolucency on X-ray"]
-all_features = list(set(selected_features + manual_features))
-for symptom in sorted(all_features):
-    inputs[symptom] = st.sidebar.checkbox(symptom)
+for feat in sorted(set(selected_features + manual_features)):
+    inputs[feat] = st.sidebar.checkbox(feat)
 
 if st.sidebar.button("Predict Diagnosis"):
     input_df = pd.DataFrame([{k: inputs.get(k, 0) for k in selected_features}])
     diagnosis = model.predict(input_df)[0]
-    st.success(f"**Predicted Diagnosis:** {diagnosis}")
-    treatment_paths = {
-        "Hyperemia": "Monitor and remove irritants. Use desensitizing agents. Follow-up recommended.",
-        "Acute Pulpitis": "Perform emergency pulpotomy or pulpectomy. Prescribe analgesics. Plan for root canal therapy.",
-        "Chronic Pulpitis": "Schedule root canal therapy. Consider crown restoration after treatment.",
-        "Periapical Abscess": "Drain abscess if necessary. Start antibiotics. Perform root canal therapy or extraction."
-    }
-    treatment = treatment_paths.get(diagnosis, "No treatment path available.")
-    st.info(f"**Suggested Treatment Path:** {treatment}")
+    st.success(f"📋 Predicted Diagnosis: **{diagnosis}**")
 
-st.write("**🔍 Feature Importance:**")
-feat_imp = pd.Series(model.feature_importances_, index=selected_features).sort_values(ascending=False)
-st.write(feat_imp)
+    treatment = {
+        "Hyperemia": "Remove irritants, monitor, apply desensitizing agent.",
+        "Acute Pulpitis": "Emergency pulpotomy or RCT, analgesics.",
+        "Chronic Pulpitis": "Scheduled root canal and restoration.",
+        "Periapical Abscess": "Drainage, antibiotics, RCT or extraction."
+    }.get(diagnosis, "No recommendation.")
+    st.info(f"💊 Treatment Plan: {treatment}")
 
-# --- Multimodal AI Section ---
+    st.session_state["diagnosis"] = diagnosis
+
+# --- X-ray Upload and Analysis ---
 st.markdown("---")
-st.header("🧠 X-ray Interpretation via Vision-Language Models")
+st.header("🧠 Analyze Dental X-ray with AI")
 
-model_choice = st.selectbox("Choose Vision-Language Model", [
-    "MedGemma (clinical)", 
-    "BLIP (captioning)", 
-    "ViT-GPT2 (captioning)", 
-    "OpenAI GPT-4 Vision", 
-    "Gemini Vision"
+xray_model = st.selectbox("Choose Vision Model", [
+    "MedGemma", "BLIP", "ViT-GPT2", "Gemini", "OpenAI GPT-4"
 ])
 
-xray_file = st.file_uploader("Upload Dental X-ray", type=["jpg", "jpeg", "png"])
-
-def medgemma_api(image_bytes):
-    url = "https://api-inference.huggingface.co/models/google/medgemma-2b"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    response = requests.post(url, headers=headers, files={"inputs": image_bytes})
-    try:
-        return response.json()
-    except Exception:
-        return {"error": "MedGemma API failed or returned invalid response."}
-
-def blip_api(image_bytes):
-    url = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    response = requests.post(url, headers=headers, files={"inputs": image_bytes})
-    try:
-        return response.json()
-    except Exception:
-        return {"error": "BLIP API failed or returned invalid response."}
-
-def vit_gpt2_api(image_bytes):
-    url = "https://api-inference.huggingface.co/models/nielsr/vit-gpt2-image-captioning"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    response = requests.post(url, headers=headers, files={"inputs": image_bytes})
-    try:
-        return response.json()
-    except Exception:
-        return {"error": "ViT-GPT2 API failed or returned invalid response."}
-
-def openai_vision_api(image_bytes):
-    return {"error": "Not implemented in this offline version."}
-
-def gemini_api(image):
-    return {"error": "Not implemented in this offline version."}
-
+xray_file = st.file_uploader("Upload a Dental X-ray (JPG, PNG)", type=["jpg", "jpeg", "png"])
 if xray_file:
     image = Image.open(xray_file).convert("RGB")
     st.image(image, caption="Uploaded X-ray", use_container_width=True)
     image_bytes = xray_file.read()
 
-    if st.button("Analyze X-ray"):
-        with st.spinner(f"Analyzing with {model_choice}..."):
-            if model_choice.startswith("MedGemma"):
-                response = medgemma_api(image_bytes)
-            elif model_choice.startswith("BLIP"):
-                response = blip_api(image_bytes)
-            elif model_choice.startswith("ViT"):
-                response = vit_gpt2_api(image_bytes)
-            elif model_choice.startswith("OpenAI"):
-                response = openai_vision_api(image_bytes)
-            elif model_choice.startswith("Gemini"):
-                response = gemini_api(image)
-            else:
-                response = {"error": "Unknown model."}
+    def call_hf(model_id):
+        response = requests.post(
+            f"https://api-inference.huggingface.co/models/{model_id}",
+            headers={"Authorization": f"Bearer {HF_TOKEN}"},
+            files={"inputs": image_bytes}
+        )
+        try:
+            return response.json()
+        except:
+            return {"error": "API failed."}
 
-        if isinstance(response, dict) and "error" in response:
-            st.error(response["error"])
+    def call_gemini(image):
+        model = genai.GenerativeModel("gemini-pro-vision")
+        try:
+            response = model.generate_content(["Analyze this dental X-ray for periapical or pulp disease.", image])
+            return response.text
+        except:
+            return "Gemini failed."
+
+    def call_openai(image):
+        try:
+            base64_img = openai._to_base64(image_bytes)
+            response = openai.ChatCompletion.create(
+                model="gpt-4-vision-preview",
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Analyze this dental X-ray for periapical, pulpal or bony pathologies."},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}}
+                    ]
+                }],
+                max_tokens=512
+            )
+            return response['choices'][0]['message']['content']
+        except Exception as e:
+            return "GPT-4 Vision failed."
+
+    if st.button("Analyze X-ray"):
+        with st.spinner(f"Analyzing using {xray_model}..."):
+            if xray_model == "MedGemma":
+                caption = call_hf("google/medgemma-2b")
+            elif xray_model == "BLIP":
+                caption = call_hf("Salesforce/blip-image-captioning-base")
+            elif xray_model == "ViT-GPT2":
+                caption = call_hf("nlpconnect/vit-gpt2-image-captioning")
+            elif xray_model == "Gemini":
+                caption = call_gemini(image)
+            elif xray_model == "OpenAI GPT-4":
+                caption = call_openai(image)
+            else:
+                caption = {"error": "Model not supported."}
+
+        if isinstance(caption, dict) and "error" in caption:
+            st.error(caption["error"])
         else:
-            st.success("✅ Multimodal AI Response:")
-            st.write(response)
+            caption_text = caption if isinstance(caption, str) else caption[0].get("generated_text", "No output.")
+            st.success("🧠 AI X-ray Interpretation:")
+            st.write(caption_text)
+
+            # Simple rule-based correlation logic
+            diagnosis = st.session_state.get("diagnosis", "")
+            correlation_keywords = {
+                "Periapical Abscess": ["radiolucency", "lesion", "bone loss", "apex"],
+                "Acute Pulpitis": ["pulp chamber", "widening", "dark area"],
+                "Chronic Pulpitis": ["calcification", "chronic", "discoloration"],
+                "Hyperemia": ["no visible lesion", "intact", "normal"]
+            }
+            matched_keywords = correlation_keywords.get(diagnosis, [])
+            support = any(kw in caption_text.lower() for kw in matched_keywords)
+
+            if diagnosis:
+                if support:
+                    st.success(f"✅ The X-ray supports the diagnosis of **{diagnosis}**.")
+                else:
+                    st.warning(f"⚠️ The X-ray does **not clearly support** the diagnosis of **{diagnosis}**.")
