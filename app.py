@@ -83,7 +83,7 @@ for symptom in sorted(all_features):
     inputs[symptom] = st.sidebar.checkbox(symptom)
 
 if st.sidebar.button("Predict Diagnosis"):
-    input_df = pd.DataFrame([inputs])
+    input_df = pd.DataFrame([{k: inputs.get(k, 0) for k in selected_features}])
     diagnosis = model.predict(input_df)[0]
     st.success(f"**Predicted Diagnosis:** {diagnosis}")
     treatment_paths = {
