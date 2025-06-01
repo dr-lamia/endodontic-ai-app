@@ -77,7 +77,9 @@ st.header("🧾 Diagnosis & Treatment Recommendation")
 
 inputs = {}
 st.sidebar.header("Patient Signs & Symptoms")
-for symptom in selected_features:
+manual_features = ["Radiolucency on X-ray"]
+all_features = list(set(selected_features + manual_features))
+for symptom in sorted(all_features):
     inputs[symptom] = st.sidebar.checkbox(symptom)
 
 if st.sidebar.button("Predict Diagnosis"):
