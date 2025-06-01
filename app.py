@@ -105,18 +105,10 @@ def query_medgemma_api(image_bytes):
     response = requests.post(API_URL, headers=headers, files={"inputs": image_bytes})
     return response.json()
 if xray_file is not None:
-    image = Image.open(xray_file).convert("RGB")
-    st.image(image, caption="Uploaded X-ray", use_column_width=True)
-
-    prompt = "Describe the dental condition based on the X-ray."
-    inputs = processor(images=image, text=prompt, return_tensors="pt").to(medgemma_model.device)
-    with torch.no_grad():
-        generated_ids = medgemma_model.generate(**inputs, max_new_tokens=100)
-        result = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-    st.success("**MedGemma AI Interpretation:**")
+    st.image(xray_file, caption="Uploaded X-ray", use_column_width=True)
     response = query_medgemma_api(xray_file.read())
+    st.success("**MedGemma AI Interpretation:**")
     if isinstance(response, dict):
         st.json(response)
     else:
         st.write(response)
-    st.write(result)
