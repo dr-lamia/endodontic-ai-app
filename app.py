@@ -1,25 +1,20 @@
 import streamlit as st
 import pandas as pd
 import random
+import requests
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectFromModel
 from imblearn.over_sampling import SMOTE
 from PIL import Image
 
-def query_huggingface_model(image_bytes, model_id, retries=2):
-    url = f"https://api-inference.huggingface.co/models/{model_id}"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    for attempt in range(retries):
-        try:
-            response = requests.post(url, headers=headers, files={"inputs": image_bytes})
-            if response.ok:
-                return response.json()
-        except Exception as e:
-            continue
-    return {"error": f"{model_id} failed after {retries} attempts."}
+# --- API Keys (from Streamlit secrets) ---
+HF_TOKEN = st.secrets.get("HF_TOKEN")
+# (BLIP is public once HF_TOKEN is valid; no other keys needed here)
 
+# --- 1. Generate + Train on Synthetic Dataset ---
 @st.cache_data
 def generate_and_process_dataset():
+    # Define all possible signs & symptoms
     symptoms = {
         "Spontaneous Pain": [0, 1],
         "Pain on Biting": [0, 1],
@@ -41,6 +36,8 @@ def generate_and_process_dataset():
     data = []
     for _ in range(500):
         patient = {symptom: random.choice(vals) for symptom, vals in symptoms.items()}
+
+        # Simple rules to assign a “true” diagnosis
         if patient["Sensitivity to Cold"] and not patient["Lingering Pain"]:
             condition = "Hyperemia"
         elif patient["Lingering Pain"] and patient["Pain on Biting"]:
@@ -51,112 +48,136 @@ def generate_and_process_dataset():
             condition = "Periapical Abscess"
         else:
             condition = random.choice(conditions)
+
         patient["Diagnosis"] = condition
         data.append(patient)
+
     df = pd.DataFrame(data)
     X = df.drop(columns=["Diagnosis"])
     y = df["Diagnosis"]
+
+    # Balance classes via SMOTE
     smote = SMOTE(random_state=42)
-    X_res, y_res = smote.fit_resample(X, y)
-    fs_model = RandomForestClassifier(random_state=42)
-    fs_model.fit(X_res, y_res)
+    X_resampled, y_resampled = smote.fit_resample(X, y)
+
+    # Feature selection via RandomForest
+    fs_model = RandomForestClassifier(n_estimators=100, random_state=42)
+    fs_model.fit(X_resampled, y_resampled)
     selector = SelectFromModel(fs_model, threshold="median", prefit=True)
-    X_sel = selector.transform(X_res)
-    sel_features = list(X.columns[selector.get_support()])
-    df_final = pd.DataFrame(X_sel, columns=sel_features)
-    df_final["Diagnosis"] = y_res
-    return df_final, sel_features
+    X_selected = selector.transform(X_resampled)
+    selected_feats = list(X.columns[selector.get_support()])
 
+    df_final = pd.DataFrame(X_selected, columns=selected_feats)
+    df_final["Diagnosis"] = y_resampled
+
+    return df_final, selected_feats
+
+# Generate dataset and train final classifier
 df_data, selected_features = generate_and_process_dataset()
-model = RandomForestClassifier()
-model.fit(df_data[selected_features], df_data["Diagnosis"])
+rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+rf_model.fit(df_data[selected_features], df_data["Diagnosis"])
 
-st.title("🦷 Endodontic AI App")
+# --- 2. UI: Symptom Input & Diagnosis Prediction ---
+st.title("🦷 Endodontic AI Assistant with Free VLM")
+
+st.sidebar.header("Patient Signs & Symptoms")
+
+# Always include “Radiolucency on X-ray” even if not selected by RF
+manual_feats = ["Radiolucency on X-ray"]
+all_feats = sorted(set(selected_features + manual_feats))
 
 inputs = {}
-st.sidebar.header("Patient Signs & Symptoms")
-manual_features = ["Radiolucency on X-ray"]
-for feat in sorted(set(selected_features + manual_features)):
+for feat in all_feats:
     inputs[feat] = st.sidebar.checkbox(feat)
 
 if st.sidebar.button("Predict Diagnosis"):
+    # Build DataFrame with only the features the model expects
     input_df = pd.DataFrame([{k: inputs.get(k, 0) for k in selected_features}])
-    diagnosis = model.predict(input_df)[0]
+    diagnosis = rf_model.predict(input_df)[0]
     st.success(f"📋 Predicted Diagnosis: **{diagnosis}**")
 
-    # --- Feature Importance ---
-    importance = model.feature_importances_
-    feat_df = pd.DataFrame({
+    # Show treatment suggestion
+    treatment_paths = {
+        "Hyperemia": "Remove irritants, monitor, apply desensitizing agent.",
+        "Acute Pulpitis": "Emergency pulpotomy or RCT, prescribe analgesics.",
+        "Chronic Pulpitis": "Schedule root canal therapy and final restoration.",
+        "Periapical Abscess": "Drain if needed, start antibiotics, perform RCT or extraction."
+    }
+    st.info(f"💊 Treatment Plan: {treatment_paths.get(diagnosis, 'No recommendation.')}")
+
+    # Feature Importance Table
+    importances = rf_model.feature_importances_
+    feat_imp_df = pd.DataFrame({
         "Feature": selected_features,
-        "Importance": importance
-    }).sort_values(by="Importance", ascending=False)
+        "Importance": importances
+    }).sort_values(by="Importance", ascending=False).reset_index(drop=True)
     st.markdown("### 🔍 Feature Importance (Diagnosis Model)")
-    st.dataframe(feat_df.reset_index(drop=True), use_container_width=True)
+    st.dataframe(feat_imp_df, use_container_width=True)
 
-import os
-import requests
-import base64
-import google.generativeai as genai
+    # Store diagnosis for later correlation
+    st.session_state["diagnosis"] = diagnosis
 
-HF_TOKEN = os.getenv("HF_TOKEN", st.secrets.get("HF_TOKEN", ""))
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", st.secrets.get("OPENAI_API_KEY", ""))
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", st.secrets.get("GOOGLE_API_KEY", ""))
+# --- 3. UI: Free VLM for X-ray Interpretation (MedGemma + BLIP) ---
+st.markdown("---")
+st.header("🧠 Optional: AI X-ray Interpretation")
 
-# Gemini setup
-if GOOGLE_API_KEY:
-    genai.configure(api_key=GOOGLE_API_KEY)
-
-
-    st.subheader("🧠 AI X-ray Interpretation:")
-    output = analyze_xray(xray_file)
-    st.success(output) if "failed" not in output.lower() else st.error(output)
-
-    if "Diagnosis" in locals():
-        if diagnosis.lower() in output.lower():
-            st.success(f"✅ The AI output supports the diagnosis of **{diagnosis}**")
-        else:
-            st.warning(f"⚠️ The X-ray does **not clearly support** the diagnosis of **{diagnosis}**.")
-
-st.subheader("📷 Optional: Upload Dental X-ray for AI Interpretation")
-vision_model = st.selectbox("Choose Free Vision Model", ["MedGemma", "BLIP (captioning)"])
-xray_file = st.file_uploader("Upload Dental X-ray image (JPG or PNG)", type=["jpg", "jpeg", "png"])
+vision_model = st.selectbox(
+    "Choose Free Vision Model",
+    ["MedGemma", "BLIP (captioning)"]
+)
+xray_file = st.file_uploader(
+    "Upload Dental X-ray image (JPG or PNG)", type=["jpg", "jpeg", "png"]
+)
 
 def query_huggingface_model(image_bytes, model_id, retries=2):
+    """
+    Query a Hugging Face inference endpoint with retries.
+    Returns the string caption or an error message.
+    """
     url = f"https://api-inference.huggingface.co/models/{model_id}"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    for attempt in range(retries):
+    for _ in range(retries):
         try:
             response = requests.post(url, headers=headers, files={"inputs": image_bytes})
             if response.ok:
                 result = response.json()
+                # Most HF image-to-text models return a list of dicts:
+                #   [{"generated_text": "..."}]
                 if isinstance(result, list) and "generated_text" in result[0]:
                     return result[0]["generated_text"]
-                else:
-                    continue
         except Exception:
-            continue
+            pass
     return f"{model_id} failed or returned invalid response."
 
-def analyze_free_vlm(xray_file, model):
-    img = Image.open(xray_file).convert("RGB")
-    st.image(img, caption="Uploaded X-ray", use_column_width=True)
-    output = ""
-    if model == "MedGemma":
-        output = query_huggingface_model(xray_file.read(), "google/medgemma-2b")
-    elif model == "BLIP (captioning)":
-        output = query_huggingface_model(xray_file.read(), "Salesforce/blip-image-captioning-base")
-    return output
-
 if xray_file and st.button("Analyze X-ray"):
-    output = analyze_free_vlm(xray_file, vision_model)
-    output_str = str(output)
-    if "failed" not in output_str.lower():
-        st.success(output_str)
-    else:
-        st.error(output_str)
+    # Display the uploaded X-ray
+    img = Image.open(xray_file).convert("RGB")
+    st.image(img, caption="Uploaded X-ray", use_container_width=True)
 
-    if "diagnosis" in locals():
-        if diagnosis.lower() in output_str.lower():
-            st.success(f"✅ The AI output supports the diagnosis of **{diagnosis}**")
+    output = ""
+    if vision_model == "MedGemma":
+        # NOTE: use the “4b-it” variant that you accepted on Hugging Face
+        output = query_huggingface_model(xray_file.read(), "google/medgemma-4b-it")
+    else:  # BLIP fallback
+        output = query_huggingface_model(xray_file.read(), "Salesforce/blip-image-captioning-base")
+
+    out_str = str(output)
+    if "failed" not in out_str.lower():
+        st.success(out_str)
+    else:
+        st.error(out_str)
+
+    # Correlate with the previously predicted diagnosis (if any)
+    if "diagnosis" in st.session_state:
+        diag = st.session_state["diagnosis"]
+        keywords_map = {
+            "Periapical Abscess": ["radiolucency", "abscess", "periapical lesion", "apex"],
+            "Acute Pulpitis": ["pulp", "widening", "dark area"],
+            "Chronic Pulpitis": ["calcification", "chronic", "discoloration"],
+            "Hyperemia": ["no lesion", "intact", "normal"]
+        }
+        matches = any(kw in out_str.lower() for kw in keywords_map.get(diag, []))
+        if matches:
+            st.success(f"✅ The X-ray interpretation supports the diagnosis of **{diag}**.")
         else:
-            st.warning(f"⚠️ The X-ray does **not clearly support** the diagnosis of **{diagnosis}**.")
+            st.warning(f"⚠️ The X-ray does **not clearly support** the diagnosis of **{diag}**.")
