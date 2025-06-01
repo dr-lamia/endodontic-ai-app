@@ -1,9 +1,8 @@
 streamlit
-scikit-learn
 pandas
-openpyxl
-imbalanced-learn
-transformers
-torch
-pillow
+scikit-learn
+imblearn
+Pillow
 requests
+openai
+google-generativeai
