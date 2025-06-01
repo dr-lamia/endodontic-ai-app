@@ -1,12 +1,22 @@
 import streamlit as st
 import pandas as pd
 import random
+import requests
+import openai
+import google.generativeai as genai
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_selection import SelectFromModel
 from imblearn.over_sampling import SMOTE
 from PIL import Image
-import requests
 
+# --- API Keys ---
+HF_TOKEN = st.secrets.get("HF_TOKEN")
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY")
+GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY")
+openai.api_key = OPENAI_API_KEY
+genai.configure(api_key=GOOGLE_API_KEY)
+
+# --- Diagnosis Data Preparation ---
 @st.cache_data
 def generate_and_process_dataset():
     signs_symptoms = {
@@ -60,8 +70,10 @@ df_data, selected_features = generate_and_process_dataset()
 model = RandomForestClassifier(n_estimators=100, random_state=42)
 model.fit(df_data[selected_features], df_data["Diagnosis"])
 
-st.title("🦷 Endodontic Disease Diagnosis AI App")
-st.write("Select the signs and symptoms from the list below and click **Predict Diagnosis** to get the AI's recommendation.")
+# --- UI Section ---
+st.title("🦷 Endodontic AI Assistant with Multimodal X-ray Analysis")
+
+st.header("🧾 Diagnosis & Treatment Recommendation")
 
 inputs = {}
 st.sidebar.header("Patient Signs & Symptoms")
@@ -81,30 +93,79 @@ if st.sidebar.button("Predict Diagnosis"):
     treatment = treatment_paths.get(diagnosis, "No treatment path available.")
     st.info(f"**Suggested Treatment Path:** {treatment}")
 
-st.markdown("---")
-st.write("**Feature importance (for transparency):**")
-importances = model.feature_importances_
-feat_imp = pd.Series(importances, index=selected_features).sort_values(ascending=False)
+st.write("**🔍 Feature Importance:**")
+feat_imp = pd.Series(model.feature_importances_, index=selected_features).sort_values(ascending=False)
 st.write(feat_imp)
 
+# --- Multimodal AI Section ---
 st.markdown("---")
-st.subheader("📷 Optional: Upload Dental X-ray for MedGemma AI Analysis")
-xray_file = st.file_uploader("Upload a dental X-ray image (JPG or PNG)", type=["jpg", "jpeg", "png"])
+st.header("🧠 X-ray Interpretation via Vision-Language Models")
 
-def query_medgemma_api(image_bytes):
-    headers = {"Authorization": f"Bearer {st.secrets['HF_TOKEN']}"}
-    API_URL = "https://api-inference.huggingface.co/models/google/medgemma-2b"
-    response = requests.post(API_URL, headers=headers, files={"inputs": image_bytes})
+model_choice = st.selectbox("Choose Vision-Language Model", [
+    "MedGemma (clinical)", 
+    "BLIP (captioning)", 
+    "ViT-GPT2 (captioning)", 
+    "OpenAI GPT-4 Vision", 
+    "Gemini Vision"
+])
+
+xray_file = st.file_uploader("Upload Dental X-ray", type=["jpg", "jpeg", "png"])
+
+def medgemma_api(image_bytes):
+    url = "https://api-inference.huggingface.co/models/google/medgemma-2b"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    response = requests.post(url, headers=headers, files={"inputs": image_bytes})
     try:
         return response.json()
-    except requests.exceptions.JSONDecodeError:
-        return {"error": "Unable to decode response. The model might still be loading or token is invalid."}
+    except Exception:
+        return {"error": "MedGemma API failed or returned invalid response."}
 
-if xray_file is not None:
-    st.image(xray_file, caption="Uploaded X-ray", use_column_width=True)
-    response = query_medgemma_api(xray_file.read())
-    if "error" in response:
-        st.error(f"MedGemma API Error: {response['error']}")
-    else:
-        st.success("**MedGemma AI Interpretation:**")
-        st.json(response)
+def blip_api(image_bytes):
+    url = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-base"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    response = requests.post(url, headers=headers, files={"inputs": image_bytes})
+    try:
+        return response.json()
+    except Exception:
+        return {"error": "BLIP API failed or returned invalid response."}
+
+def vit_gpt2_api(image_bytes):
+    url = "https://api-inference.huggingface.co/models/nielsr/vit-gpt2-image-captioning"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    response = requests.post(url, headers=headers, files={"inputs": image_bytes})
+    try:
+        return response.json()
+    except Exception:
+        return {"error": "ViT-GPT2 API failed or returned invalid response."}
+
+def openai_vision_api(image_bytes):
+    return {"error": "Not implemented in this offline version."}
+
+def gemini_api(image):
+    return {"error": "Not implemented in this offline version."}
+
+if xray_file:
+    image = Image.open(xray_file).convert("RGB")
+    st.image(image, caption="Uploaded X-ray", use_container_width=True)
+    image_bytes = xray_file.read()
+
+    if st.button("Analyze X-ray"):
+        with st.spinner(f"Analyzing with {model_choice}..."):
+            if model_choice.startswith("MedGemma"):
+                response = medgemma_api(image_bytes)
+            elif model_choice.startswith("BLIP"):
+                response = blip_api(image_bytes)
+            elif model_choice.startswith("ViT"):
+                response = vit_gpt2_api(image_bytes)
+            elif model_choice.startswith("OpenAI"):
+                response = openai_vision_api(image_bytes)
+            elif model_choice.startswith("Gemini"):
+                response = gemini_api(image)
+            else:
+                response = {"error": "Unknown model."}
+
+        if isinstance(response, dict) and "error" in response:
+            st.error(response["error"])
+        else:
+            st.success("✅ Multimodal AI Response:")
+            st.write(response)
