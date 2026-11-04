@@ -9,7 +9,7 @@ from imblearn.over_sampling import SMOTE
 import io
 import os
 import datetime
-import openai
+from openai import OpenAI
 
 # ✅ Must be first Streamlit command
 st.set_page_config(page_title="Endodontic Multimodal AI Assistant", layout="wide")
@@ -17,7 +17,7 @@ st.set_page_config(page_title="Endodontic Multimodal AI Assistant", layout="wide
 # --- API Keys (set in Streamlit Cloud secrets) ---
 HF_TOKEN = st.secrets.get("HF_TOKEN")
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY")
-openai.api_key = OPENAI_API_KEY
+openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # --- 1. Generate + Train Model on Synthetic Dataset ---
 @st.cache_data
@@ -126,17 +126,20 @@ user_input = st.text_input("Ask a question about the diagnosis or treatment:")
 if user_input:
     diagnosis = st.session_state.get("diagnosis", "a dental condition")
 
-    try:
-        response = openai.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": f"You are a dental assistant helping interpret {diagnosis}"},
-                {"role": "user", "content": user_input},
-            ]
-        )
-        answer = response.choices[0].message.content
-    except Exception as e:
-        answer = "❌ GPT-4 API failed: " + str(e)
+    if openai_client is None:
+        answer = "❌ OpenAI is not configured. Add OPENAI_API_KEY to your Streamlit secrets."
+    else:
+        try:
+            response = openai_client.chat.completions.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": f"You are a dental assistant helping interpret {diagnosis}"},
+                    {"role": "user", "content": user_input},
+                ]
+            )
+            answer = response.choices[0].message.content
+        except Exception as e:
+            answer = "❌ GPT-4 API failed: " + str(e)
 
     st.session_state.chat_history.append(("You", user_input))
     st.session_state.chat_history.append(("AI", answer))
